@@ -1,5 +1,7 @@
-index=my_app_index met
-| rex "cpuUsage\":(?<cpu_usage>[\d.]+)"
-| rex "freeHeap\":\s*(?<free_heap>[\d.]+)"
+index=my_app_index a
+| rex "cpuUsage[\":]+\s*(?<cpu_usage>[\d.]+)"
+| rex "freeHeap[\":]+\s*(?<free_heap>[\d.]+)"
+| where isnotnull(cpu_usage) AND isnotnull(free_heap)
 | eval cpu_pct = round(cpu_usage * 100, 2)
-| timechart span=1m avg(cpu_pct) as "CPU %" avg(free_heap) as "Free Heap MB"
+| eval free_heap = tonumber(free_heap)
+| timechart span=5m avg(cpu_pct) as "CPU %" avg(free_heap) as "Free Heap"
