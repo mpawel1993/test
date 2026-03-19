@@ -1,15 +1,13 @@
-import { ApplicationConfig, APP_INITIALIZER } from '@angular/core';
-import { provideHttpClient } from '@angular/common/http';
-import { initializeApp } from './app.initializer';
+import { ApplicationConfig, provideAppInitializer } from '@angular/core';
+import { inject } from '@angular/core';
+import { MyConfigService } from './services/my-config.service';
 
 export const appConfig: ApplicationConfig = {
     providers: [
-        provideHttpClient(),
-        // Nowoczesny zapis w Angular 20:
-        {
-            provide: APP_INITIALIZER,
-            useFactory: initializeApp,
-            multi: true,
-        },
-    ],
+        // Zamiast { provide: APP_INITIALIZER, ... }
+        provideAppInitializer(() => {
+            const configService = inject(MyConfigService);
+            return configService.loadRemoteData(); // Musi zwracać Promise
+        })
+    ]
 };
