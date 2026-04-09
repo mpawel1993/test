@@ -11,3 +11,23 @@ export const appConfig: ApplicationConfig = {
         })
     ]
 };
+
+loadScript(path: string, document: Document): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    let node = document.createElement('script');
+    node.type = 'text/javascript';
+    node.async = true;
+    node.src = path;
+
+    node.onload = function () {
+      console.log('done');
+      resolve();
+    };
+
+    node.onerror = function () {
+      reject(new Error(`Failed to load script: ${path}`));
+    };
+
+    document.getElementsByTagName('head')[0].appendChild(node);
+  });
+}
