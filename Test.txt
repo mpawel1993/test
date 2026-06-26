@@ -1,7 +1,1 @@
-index=my_app_index a
-| rex "cpuUsage[\":]+\s*(?<cpu_usage>[\d.]+)"
-| rex "freeHeap[\":]+\s*(?<free_heap>[\d.]+)"
-| where isnotnull(cpu_usage) AND isnotnull(free_heap)
-| eval cpu_pct = round(cpu_usage * 100, 2)
-| eval free_heap = tonumber(free_heap)
-| timechart span=5m avg(cpu_pct) as "CPU %" avg(free_heap) as "Free Heap"
+keytool -importcert -file certyfikat.der -alias mojadomena -keystore certyfikat.p12 -storetype PKCS12
