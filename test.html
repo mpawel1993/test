@@ -1,0 +1,14 @@
+<div class="chat-bubble">
+    <div class="bubble-content">
+        <span class="main-text">Wykonano zapytanie do bazy danych</span>
+        <button class="toggle-btn" (click)="toggleDropdown()" [class.open]="isOpen">
+            SQL <span class="arrow">&#9662;</span>
+        </button>
+    </div>
+
+    <div class="sql-dropdown" [class.show]="isOpen">
+        <pre><code>{{ sqlCode }}</code></pre>
+    </div>
+</div>
+
+<app-sql-bubble [sqlCode]="'SELECT email, role FROM accounts WHERE active = true;'"></app-sql-bubble>
