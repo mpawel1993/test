@@ -1,15 +1,19 @@
-import { Component, Input } from '@angular/core';
+const { test, expect } = require('@playwright/test');
 
-@Component({
-  selector: 'app-sql-bubble',
-  templateUrl: './sql-bubble.component.html',
-  styleUrls: ['./sql-bubble.component.css']
-})
-export class SqlBubbleComponent {
-  @Input() sqlCode: string = 'SELECT * FROM users WHERE id = 1;'; // Domyślny placeholder
-  isOpen: boolean = false;
+test('podstawowy test - sprawdzenie tytułu i interakcji', async ({ page }) => {
+  // 1. Wejdź na stronę
+  await page.goto('https://example.com');
 
-  toggleDropdown() {
-    this.isOpen = !this.isOpen;
-  }
-}
+  // 2. Sprawdź, czy tytuł strony jest poprawny
+  await expect(page).toHaveTitle(/Example Domain/);
+
+  // 3. Sprawdź, czy nagłówek H1 zawiera odpowiedni tekst
+  const header = page.locator('h1');
+  await expect(header).toHaveText('Example Domain');
+
+  // 4. Kliknij w link "More information..."
+  await page.locator('a').click();
+
+  // 5. Upewnij się, że po kliknięciu URL się zmienił
+  await expect(page).toHaveURL(/iana.org/);
+});
