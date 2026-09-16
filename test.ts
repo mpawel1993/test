@@ -29,3 +29,14 @@ export default defineConfig({
     channel: 'chrome',
   },
 });
+
+
+import { defineConfig } from '@playwright/test';
+
+export default defineConfig({
+  use: {
+    headless: true,
+    // Ścieżka do lokalnie zainstalowanego Chrome
+    executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+  },
+});
