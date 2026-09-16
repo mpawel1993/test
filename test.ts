@@ -40,3 +40,35 @@ export default defineConfig({
     executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
   },
 });
+
+
+import { defineConfig, devices } from '@playwright/test';
+
+export default defineConfig({
+  // Katalog z testami
+  testDir: './tests',
+
+  use: {
+    // 1. Wymuszenie trybu w tle dla wszystkich projektów
+    headless: true,
+
+    // 2. Wykonywanie zrzutów ekranu w przypadku błędu
+    screenshot: 'only-on-failure',
+  },
+
+  projects: [
+    {
+      name: 'firefox',
+      use: {
+        ...devices['Desktop Firefox'],
+
+        // Ustawienia uruchamiania własnej binarki Firefoxa
+        launchOptions: {
+          // Ścieżka do Firefoxa w systemie Linux / kontenerze Docker
+          // (Zmień na właściwą, jeśli u Was jest w innym miejscu, np. /usr/bin/firefox-esr)
+          executablePath: '/usr/bin/firefox',
+        },
+      },
+    },
+  ],
+});
