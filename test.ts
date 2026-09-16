@@ -1,19 +1,31 @@
-const { test, expect } = require('@playwright/test');
+import { chromium, Browser } from 'playwright';
 
-test('podstawowy test - sprawdzenie tytułu i interakcji', async ({ page }) => {
-  // 1. Wejdź na stronę
-  await page.goto('https://example.com');
+(async (): Promise<void> => {
+  try {
+    const browser: Browser = await chromium.launch({
+      // Wykrywa zainstalowanego w systemie Google Chrome
+      channel: 'chrome',
+      headless: true,
 
-  // 2. Sprawdź, czy tytuł strony jest poprawny
-  await expect(page).toHaveTitle(/Example Domain/);
+      // Jeśli channel nie zadziała z powodu restrykcji, odkomentuj i podaj ścieżkę:
+      // executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+    });
 
-  // 3. Sprawdź, czy nagłówek H1 zawiera odpowiedni tekst
-  const header = page.locator('h1');
-  await expect(header).toHaveText('Example Domain');
+    console.log('Połączono z firmowym Chrome!');
+    await browser.close();
+  } catch (error) {
+    console.error('Błąd uruchamiania przeglądarki:', error);
+  }
+})();
 
-  // 4. Kliknij w link "More information..."
-  await page.locator('a').click();
 
-  // 5. Upewnij się, że po kliknięciu URL się zmienił
-  await expect(page).toHaveURL(/iana.org/);
+
+import { defineConfig, devices } from '@playwright/test';
+
+export default defineConfig({
+  use: {
+    headless: true,
+    // Globalne wskazanie na firmowy Chrome dla wszystkich testów
+    channel: 'chrome',
+  },
 });
