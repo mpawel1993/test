@@ -72,3 +72,26 @@ export default defineConfig({
     },
   ],
 });
+
+export default defineConfig({
+  projects: [
+    {
+      name: 'firefox',
+      use: {
+        ...devices['Desktop Firefox'],
+        headless: true,
+        launchOptions: {
+          executablePath: '/usr/bin/firefox',
+          // 1. Przekazanie flagi wyłączającej sandbox do Firefoxa
+          args: ['--no-sandbox'],
+          // 2. Wyłączenie piaskownicy przez zmienne środowiskowe procesów Firefoxa
+          env: {
+            ...process.env,
+            MOZ_DISABLE_CONTENT_SANDBOX: '1',
+            MOZ_DISABLE_RDD_SANDBOX: '1',
+          },
+        },
+      },
+    },
+  ],
+});
