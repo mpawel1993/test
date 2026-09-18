@@ -1,3 +1,1 @@
-keytool -importcert -file certyfikat.der -alias mojadomena -keystore certyfikat.p12 -storetype PKCS12
-
-After carefully analyzing the pros and cons of using Web FS, we have concluded that it will be significantly easier for us not to adopt this technology. Instead, downloading reports directly from Jenkins jobs is a much more straightforward and practical approach for our needs.
+PATH = "C:\\Program Files\\nodejs;C:\\Windows\\system32;C:\\Windows;${env.PATH}"
