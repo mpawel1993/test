@@ -1,4 +1,22 @@
-checkout scmGit(
+pipeline {
+    agent any
+    
+    environment {
+        PATH+NODE = "C:\\Program Files\\nodejs"
+    }
+
+    stages {
+        stage('Pobieranie i Test') {
+            steps {
+                // Pełna, oficjalna funkcja checkout
+                checkout scmGit(
                     userRemoteConfigs: [[url: 'https://github.com/twoje-repo.git', credentialsId: 'id-twoich-poswiadczen']],
                     branches: [[name: '*/main']]
                 )
+                
+                bat 'node -v'
+                bat 'npm test'
+            }
+        }
+    }
+}
