@@ -19,8 +19,8 @@ public record PlaywrightReportDto(
     public record StatsDto(
             long startTime,
             double duration,
-            int expected,     // passed
-            int unexpected,   // failed
+            int expected,
+            int unexpected,
             int skipped,
             int flaky
     ) {}
@@ -31,7 +31,7 @@ public record PlaywrightReportDto(
             String title,
             String file,
             int line,
-            List<SuiteDto> suites, // pod-zestawy (sub-suites)
+            List<SuiteDto> suites,
             List<SpecDto> specs
     ) {}
 
@@ -49,7 +49,7 @@ public record PlaywrightReportDto(
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record TestDto(
             String timeout,
-            String status, // expected, unexpected, skipped, flaky
+            String status,
             List<TestResultDto> results
     ) {}
 
@@ -57,11 +57,31 @@ public record PlaywrightReportDto(
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record TestResultDto(
             int retry,
-            String status, // passed, failed, timedOut, skipped
+            String status,
             double duration,
             ErrorDto error,
             List<ErrorDto> errors,
-            List<AttachmentDto> attachments
+            List<AttachmentDto> attachments,
+            List<StepDto> steps // <--- DODANA LISTA KROKÓW
+    ) {}
+
+    // NOWY REKORD DLA KROKU TESTU
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
+    public record StepDto(
+            String title,
+            double duration,
+            ErrorDto error,
+            List<StepDto> steps, // <--- REKURENCJA: krok może mieć własne sub-stepy
+            LocationDto location
+    ) {}
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
+    public record LocationDto(
+            String file,
+            int line,
+            int column
     ) {}
 
     @JsonIgnoreProperties(ignoreUnknown = true)
@@ -79,70 +99,4 @@ public record PlaywrightReportDto(
             String contentType,
             String path
     ) {}
-}
-
-
-package com.example.demo.service;
-
-import com.example.demo.dto.playwright.PlaywrightReportDto;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import org.springframework.stereotype.Service;
-import org.springframework.web.multipart.MultipartFile;
-
-import java.io.File;
-import java.io.IOException;
-
-@Service
-public class PlaywrightReportService {
-
-    private final ObjectMapper objectMapper;
-
-    // Spring automatycznie wstrzyknie skonfigurowany ObjectMapper
-    public PlaywrightReportService(ObjectMapper objectMapper) {
-        this.objectMapper = objectMapper;
-    }
-
-    // Odczyt z pliku na dysku
-    public PlaywrightReportDto parseReportFromFile(String filePath) throws IOException {
-        return objectMapper.readValue(new File(filePath), PlaywrightReportDto.class);
-    }
-
-    // Odczyt z pliku przesłanego przez REST API (MultipartFile)
-    public PlaywrightReportDto parseReportFromUpload(MultipartFile file) throws IOException {
-        return objectMapper.readValue(file.getInputStream(), PlaywrightReportDto.class);
-    }
-}
-
-
-package com.example.demo.controller;
-
-import com.example.demo.dto.playwright.PlaywrightReportDto;
-import com.example.demo.service.PlaywrightReportService;
-import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
-        import org.springframework.web.multipart.MultipartFile;
-
-import java.io.IOException;
-
-@RestController
-@RequestMapping("/api/reports")
-public class PlaywrightReportController {
-
-    private final PlaywrightReportService reportService;
-
-    public PlaywrightReportController(PlaywrightReportService reportService) {
-        this.reportService = reportService;
-    }
-
-    @PostMapping("/upload")
-    public ResponseEntity<String> uploadReport(@RequestParam("file") MultipartFile file) throws IOException {
-        PlaywrightReportDto report = reportService.parseReportFromUpload(file);
-
-        int totalFailed = report.stats().unexpected();
-        int totalPassed = report.stats().expected();
-
-        return ResponseEntity.ok(
-                String.format("Raport przetworzony. Sukcesy: %d, Błędy: %d", totalPassed, totalFailed)
-        );
-    }
 }
