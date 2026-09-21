@@ -9,28 +9,13 @@ import java.util.List;
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
 public record PlaywrightReportDto(
-        StatsDto stats,
-        List<SuiteDto> suites,
-        List<ErrorDto> errors
+        List<SuiteDto> suites
 ) {
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
-    public record StatsDto(
-            long startTime,
-            double duration,
-            int expected,
-            int unexpected,
-            int skipped,
-            int flaky
-    ) {}
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record SuiteDto(
             String title,
-            String file,
-            int line,
             List<SuiteDto> suites,
             List<SpecDto> specs
     ) {}
@@ -38,65 +23,152 @@ public record PlaywrightReportDto(
     @JsonIgnoreProperties(ignoreUnknown = true)
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record SpecDto(
-            String id,
             String title,
-            String file,
-            int line,
             List<TestDto> tests
     ) {}
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record TestDto(
-            String timeout,
-            String status,
+            String status, // ogólny status testu: expected, unexpected, skipped
             List<TestResultDto> results
     ) {}
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record TestResultDto(
-            int retry,
-            String status,
-            double duration,
+            String status, // status próby: passed, failed, timedOut, skipped
             ErrorDto error,
-            List<ErrorDto> errors,
-            List<AttachmentDto> attachments,
-            List<StepDto> steps // <--- DODANA LISTA KROKÓW
+            List<StepDto> steps
     ) {}
 
-    // NOWY REKORD DLA KROKU TESTU
     @JsonIgnoreProperties(ignoreUnknown = true)
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record StepDto(
             String title,
-            double duration,
             ErrorDto error,
-            List<StepDto> steps, // <--- REKURENCJA: krok może mieć własne sub-stepy
-            LocationDto location
-    ) {}
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
-    public record LocationDto(
-            String file,
-            int line,
-            int column
+            List<StepDto> steps
     ) {}
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record ErrorDto(
-            String message,
-            String stack,
-            String value
+            String message
     ) {}
+}
 
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
-    public record AttachmentDto(
-            String name,
-            String contentType,
-            String path
+
+package com.example.demo.dto.summary;
+
+import java.util.List;
+
+public record TestSummary(
+        String testTitle,
+        String testStatus, // passed / failed
+        String testErrorMessage,
+        List<StepSummary> steps
+) {
+    public record StepSummary(
+            String stepTitle,
+            String stepStatus, // passed / failed
+            String stepErrorMessage
     ) {}
+}
+
+package com.example.demo.service;
+
+import com.example.demo.dto.playwright.PlaywrightReportDto;
+import com.example.demo.dto.summary.TestSummary;
+import com.example.demo.dto.summary.TestSummary.StepSummary;
+import org.springframework.stereotype.Service;
+
+import java.util.ArrayList;
+import java.util.List;
+
+@Service
+public class PlaywrightReportParserService {
+
+    public List<TestSummary> parseReport(PlaywrightReportDto report) {
+        List<TestSummary> summaries = new ArrayList<>();
+        if (report.suites() != null) {
+            for (PlaywrightReportDto.SuiteDto suite : report.suites()) {
+                extractTestsFromSuite(suite, summaries);
+            }
+        }
+        return summaries;
+    }
+
+    private void extractTestsFromSuite(PlaywrightReportDto.SuiteDto suite, List<TestSummary> summaries) {
+        if (suite.specs() != null) {
+            for (PlaywrightReportDto.SpecDto spec : suite.specs()) {
+                String testTitle = spec.title();
+
+                for (PlaywrightReportDto.TestDto test : spec.tests()) {
+                    for (PlaywrightReportDto.TestResultDto result : test.results()) {
+
+                        String testStatus = result.status(); // passed, failed, timedOut
+                        String testError = (result.error() != null) ? result.error().message() : null;
+
+                        // Wyciąganie i spłaszczanie kroków
+                        List<StepSummary> stepSummaries = new ArrayList<>();
+                        if (result.steps() != null) {
+                            for (PlaywrightReportDto.StepDto step : result.steps()) {
+                                extractSteps(step, stepSummaries);
+                            }
+                        }
+
+                        summaries.add(new TestSummary(testTitle, testStatus, testError, stepSummaries));
+                    }
+                }
+            }
+        }
+
+        // Reagowanie na zagnieżdżone zestawy (sub-suites)
+        if (suite.suites() != null) {
+            for (PlaywrightReportDto.SuiteDto subSuite : suite.suites()) {
+                extractTestsFromSuite(subSuite, summaries);
+            }
+        }
+    }
+
+    private void extractSteps(PlaywrightReportDto.StepDto step, List<StepSummary> stepSummaries) {
+        // Określenie statusu kroku: jeśli jest obiekt error -> failed, w przeciwnym razie -> passed
+        boolean hasError = step.error() != null;
+        String stepStatus = hasError ? "failed" : "passed";
+        String stepError = hasError ? step.error().message() : null;
+
+        stepSummaries.add(new StepSummary(step.title(), stepStatus, stepError));
+
+        // Jeśli krok posiada pod-kroki, przeliczamy je również
+        if (step.steps() != null) {
+            for (PlaywrightReportDto.StepDto subStep : step.steps()) {
+                extractSteps(subStep, stepSummaries);
+            }
+        }
+    }
+}
+
+package com.example.demo.controller;
+
+import com.example.demo.dto.playwright.PlaywrightReportDto;
+import com.example.demo.dto.summary.TestSummary;
+import com.example.demo.service.PlaywrightReportParserService;
+import org.springframework.web.bind.annotation.*;
+
+        import java.util.List;
+
+@RestController
+@RequestMapping("/api/reports")
+public class PlaywrightReportController {
+
+    private final PlaywrightReportParserService parserService;
+
+    public PlaywrightReportController(PlaywrightReportParserService parserService) {
+        this.parserService = parserService;
+    }
+
+    @PostMapping(value = "/summary", consumes = "application/json")
+    public List<TestSummary> getReportSummary(@RequestBody PlaywrightReportDto rawReport) {
+        return parserService.parseReport(rawReport);
+    }
 }
