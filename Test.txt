@@ -20,3 +20,5 @@ pipeline {
         }
     }
 }
+
+curl.exe -X POST "http://localhost:8080/api/reports/summary" -H "Content-Type: application/json; charset=utf-8" --data-binary @test-json
