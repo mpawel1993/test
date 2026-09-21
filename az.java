@@ -1,69 +1,148 @@
-import c.Flip;
-import java.lang.reflect.Array;
-import java.math.BigDecimal;
-import java.text.DecimalFormat;
-import java.util.*;
+package com.example.demo.dto.playwright;
 
-public class KdbMapper {
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.databind.PropertyNamingStrategies;
+import com.fasterxml.jackson.databind.annotation.JsonNaming;
 
-    // Formatka, żeby zapobiec notacji naukowej przy konwersji Double -> String
-    private static final DecimalFormat df = new DecimalFormat("0.##########");
+import java.util.List;
 
-    public static List<Map<String, String>> mapFlipToListOfMaps(Flip flip) {
-        List<Map<String, String>> resultList = new ArrayList<>();
+@JsonIgnoreProperties(ignoreUnknown = true)
+@JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
+public record PlaywrightReportDto(
+        StatsDto stats,
+        List<SuiteDto> suites,
+        List<ErrorDto> errors
+) {
 
-        String[] columnNames = flip.x; // Nazwy kolumn
-        Object[] columnData = flip.y;  // Dane kolumn (tablice)
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
+    public record StatsDto(
+            long startTime,
+            double duration,
+            int expected,     // passed
+            int unexpected,   // failed
+            int skipped,
+            int flaky
+    ) {}
 
-        if (columnNames == null || columnNames.length == 0) {
-            return resultList;
-        }
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
+    public record SuiteDto(
+            String title,
+            String file,
+            int line,
+            List<SuiteDto> suites, // pod-zestawy (sub-suites)
+            List<SpecDto> specs
+    ) {}
 
-        // Ustalamy liczbę wierszy na podstawie długości pierwszej kolumny
-        int rowCount = Array.getLength(columnData[0]);
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
+    public record SpecDto(
+            String id,
+            String title,
+            String file,
+            int line,
+            List<TestDto> tests
+    ) {}
 
-        for (int i = 0; i < rowCount; i++) {
-            Map<String, String> rowMap = new LinkedHashMap<>(); // LinkedHashMap zachowa kolejność kolumn
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
+    public record TestDto(
+            String timeout,
+            String status, // expected, unexpected, skipped, flaky
+            List<TestResultDto> results
+    ) {}
 
-            for (int col = 0; col < columnNames.length; col++) {
-                String colName = columnNames[col];
-                Object colArray = columnData[col];
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
+    public record TestResultDto(
+            int retry,
+            String status, // passed, failed, timedOut, skipped
+            double duration,
+            ErrorDto error,
+            List<ErrorDto> errors,
+            List<AttachmentDto> attachments
+    ) {}
 
-                // Pobieramy wartość dla konkretnego wiersza i kolumny
-                Object rawValue = Array.get(colArray, i);
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
+    public record ErrorDto(
+            String message,
+            String stack,
+            String value
+    ) {}
 
-                // Mapujemy i zamieniamy na String
-                rowMap.put(colName, convertValueToString(rawValue));
-            }
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
+    public record AttachmentDto(
+            String name,
+            String contentType,
+            String path
+    ) {}
+}
 
-            resultList.add(rowMap);
-        }
 
-        return resultList;
+package com.example.demo.service;
+
+import com.example.demo.dto.playwright.PlaywrightReportDto;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.stereotype.Service;
+import org.springframework.web.multipart.MultipartFile;
+
+import java.io.File;
+import java.io.IOException;
+
+@Service
+public class PlaywrightReportService {
+
+    private final ObjectMapper objectMapper;
+
+    // Spring automatycznie wstrzyknie skonfigurowany ObjectMapper
+    public PlaywrightReportService(ObjectMapper objectMapper) {
+        this.objectMapper = objectMapper;
     }
 
-    private static String convertValueToString(Object value) {
-        if (value == null) {
-            return ""; // Lub null, zależnie od Twoich wymagań biznesowych
-        }
+    // Odczyt z pliku na dysku
+    public PlaywrightReportDto parseReportFromFile(String filePath) throws IOException {
+        return objectMapper.readValue(new File(filePath), PlaywrightReportDto.class);
+    }
 
-        // 1. Obsługa tablicy znaków (char[]) -> String
-        if (value instanceof char[]) {
-            return new String((char[]) value);
-        }
+    // Odczyt z pliku przesłanego przez REST API (MultipartFile)
+    public PlaywrightReportDto parseReportFromUpload(MultipartFile file) throws IOException {
+        return objectMapper.readValue(file.getInputStream(), PlaywrightReportDto.class);
+    }
+}
 
-        // 2. Obsługa Double / Float -> BigDecimal -> String (czyste formatowanie)
-        if (value instanceof Double || value instanceof Float) {
-            double dValue = ((Number) value).doubleValue();
-            if (Double.isNaN(dValue) || Double.isInfinite(dValue)) {
-                return "0"; // kdb ma swoje specyficzne nulle (np. 0N), sterownik mapuje je na NaN
-            }
-            // Konwersja na BigDecimal rozwiązuje problemy z precyzją zmiennoprzecinkową
-            return new BigDecimal(df.format(dValue)).toPlainString();
-        }
 
-        // 3. Zabezpieczenie dla kdb-owych typów czasowych/datowych lub innych obiektów
-        // c.java mapuje np. c.Timespan, c.Date, które mają czytelne metody toString()
-        return value.toString().trim();
+package com.example.demo.controller;
+
+import com.example.demo.dto.playwright.PlaywrightReportDto;
+import com.example.demo.service.PlaywrightReportService;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+        import org.springframework.web.multipart.MultipartFile;
+
+import java.io.IOException;
+
+@RestController
+@RequestMapping("/api/reports")
+public class PlaywrightReportController {
+
+    private final PlaywrightReportService reportService;
+
+    public PlaywrightReportController(PlaywrightReportService reportService) {
+        this.reportService = reportService;
+    }
+
+    @PostMapping("/upload")
+    public ResponseEntity<String> uploadReport(@RequestParam("file") MultipartFile file) throws IOException {
+        PlaywrightReportDto report = reportService.parseReportFromUpload(file);
+
+        int totalFailed = report.stats().unexpected();
+        int totalPassed = report.stats().expected();
+
+        return ResponseEntity.ok(
+                String.format("Raport przetworzony. Sukcesy: %d, Błędy: %d", totalPassed, totalFailed)
+        );
     }
 }
