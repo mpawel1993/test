@@ -1,174 +1,130 @@
-package com.example.demo.dto.playwright;
+@RestController
+@RequestMapping("/api/jobs")
+public class JenkinsController {
 
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
-import com.fasterxml.jackson.databind.PropertyNamingStrategies;
-import com.fasterxml.jackson.databind.annotation.JsonNaming;
+    private final JenkinsIntegrationService jenkinsService;
 
-import java.util.List;
+    public JenkinsController(JenkinsIntegrationService jenkinsService) {
+        this.jenkinsService = jenkinsService;
+    }
 
-@JsonIgnoreProperties(ignoreUnknown = true)
-@JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
-public record PlaywrightReportDto(
-        List<SuiteDto> suites
-) {
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
-    public record SuiteDto(
-            String title,
-            List<SuiteDto> suites,
-            List<SpecDto> specs
-    ) {}
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
-    public record SpecDto(
-            String title,
-            List<TestDto> tests
-    ) {}
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
-    public record TestDto(
-            String status, // ogólny status testu: expected, unexpected, skipped
-            List<TestResultDto> results
-    ) {}
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
-    public record TestResultDto(
-            String status, // status próby: passed, failed, timedOut, skipped
-            ErrorDto error,
-            List<StepDto> steps
-    ) {}
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
-    public record StepDto(
-            String title,
-            ErrorDto error,
-            List<StepDto> steps
-    ) {}
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
-    public record ErrorDto(
-            String message
-    ) {}
+    @PostMapping("/run")
+    public CompletableFuture<ResponseEntity<JobReportDto>> runJob(@RequestParam String executionId) {
+        return jenkinsService.triggerAndAwaitReport(executionId)
+                .thenApply(ResponseEntity::ok);
+    }
 }
 
 
-package com.example.demo.dto.summary;
+package com.example.jenkins.service;
 
-import java.util.List;
-
-public record TestSummary(
-        String testTitle,
-        String testStatus, // passed / failed
-        String testErrorMessage,
-        List<StepSummary> steps
-) {
-    public record StepSummary(
-            String stepTitle,
-            String stepStatus, // passed / failed
-            String stepErrorMessage
-    ) {}
-}
-
-package com.example.demo.service;
-
-import com.example.demo.dto.playwright.PlaywrightReportDto;
-import com.example.demo.dto.summary.TestSummary;
-import com.example.demo.dto.summary.TestSummary.StepSummary;
+import com.example.jenkins.dto.*;
+        import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestClient;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.net.URI;
+import java.util.concurrent.CompletableFuture;
 
 @Service
-public class PlaywrightReportParserService {
+public class JenkinsIntegrationService {
 
-    public List<TestSummary> parseReport(PlaywrightReportDto report) {
-        List<TestSummary> summaries = new ArrayList<>();
-        if (report.suites() != null) {
-            for (PlaywrightReportDto.SuiteDto suite : report.suites()) {
-                extractTestsFromSuite(suite, summaries);
-            }
-        }
-        return summaries;
+    private static final Logger log = LoggerFactory.getLogger(JenkinsIntegrationService.class);
+
+    private final RestClient jenkinsClient;
+
+    // Konfiguracja klienta z Basic Auth dla Jenkinsa
+    public JenkinsIntegrationService(RestClient.Builder builder) {
+        this.jenkinsClient = builder
+                .baseUrl("https://jenkins.your-domain.com")
+                .defaultHeaders(headers -> headers.setBasicAuth("admin", "11aabbcc_API_TOKEN"))
+                .build();
     }
 
-    private void extractTestsFromSuite(PlaywrightReportDto.SuiteDto suite, List<TestSummary> summaries) {
-        if (suite.specs() != null) {
-            for (PlaywrightReportDto.SpecDto spec : suite.specs()) {
-                String testTitle = spec.title();
+    @Async
+    public CompletableFuture<JobReportDto> triggerAndAwaitReport(String executionId) {
+        try {
+            // 1. TRIGGER JOBA
+            ResponseEntity<Void> triggerResponse = jenkinsClient.post()
+                    .uri("/job/MojaAutomatyzacja/buildWithParameters?EXTERNAL_EXECUTION_ID={id}", executionId)
+                    .retrieve()
+                    .toBodilessEntity();
 
-                for (PlaywrightReportDto.TestDto test : spec.tests()) {
-                    for (PlaywrightReportDto.TestResultDto result : test.results()) {
-
-                        String testStatus = result.status(); // passed, failed, timedOut
-                        String testError = (result.error() != null) ? result.error().message() : null;
-
-                        // Wyciąganie i spłaszczanie kroków
-                        List<StepSummary> stepSummaries = new ArrayList<>();
-                        if (result.steps() != null) {
-                            for (PlaywrightReportDto.StepDto step : result.steps()) {
-                                extractSteps(step, stepSummaries);
-                            }
-                        }
-
-                        summaries.add(new TestSummary(testTitle, testStatus, testError, stepSummaries));
-                    }
-                }
+            URI queueItemUri = triggerResponse.getHeaders().getLocation();
+            if (queueItemUri == null) {
+                throw new IllegalStateException("Jenkins nie zwrócił nagłówka Location dla kolejki!");
             }
-        }
 
-        // Reagowanie na zagnieżdżone zestawy (sub-suites)
-        if (suite.suites() != null) {
-            for (PlaywrightReportDto.SuiteDto subSuite : suite.suites()) {
-                extractTestsFromSuite(subSuite, summaries);
+            log.info("[{}] Job w kolejce: {}", executionId, queueItemUri);
+
+            // 2. CZEKANIE NA WYSTARTOWANIE JOBA (Pobranie Build Number)
+            int buildNumber = awaitBuildStart(queueItemUri);
+            log.info("[{}] Job wystartował jako Build #{}", executionId, buildNumber);
+
+            // 3. POLLING STANU ZAKOŃCZENIA JOBA
+            String result = awaitJobCompletion("MojaAutomatyzacja", buildNumber);
+            log.info("[{}] Job zakończony ze statusem: {}", executionId, result);
+
+            if (!"SUCCESS".equals(result)) {
+                throw new RuntimeException("Job zakończył się niepowodzeniem: " + result);
             }
+
+            // 4. POBRANIE ARTEFAKTU Z RAPORTEM
+            JobReportDto report = jenkinsClient.get()
+                    .uri("/job/MojaAutomatyzacja/{buildNumber}/artifact/reports/result.json", buildNumber)
+                    .accept(MediaType.APPLICATION_JSON)
+                    .retrieve()
+                    .body(JobReportDto.class);
+
+            return CompletableFuture.completedFuture(report);
+
+        } catch (Exception e) {
+            log.error("[{}] Błąd podczas wykonywania joba Jenkins", executionId, e);
+            return CompletableFuture.failedFuture(e);
         }
     }
 
-    private void extractSteps(PlaywrightReportDto.StepDto step, List<StepSummary> stepSummaries) {
-        // Określenie statusu kroku: jeśli jest obiekt error -> failed, w przeciwnym razie -> passed
-        boolean hasError = step.error() != null;
-        String stepStatus = hasError ? "failed" : "passed";
-        String stepError = hasError ? step.error().message() : null;
+    private int awaitBuildStart(URI queueItemUri) throws InterruptedException {
+        while (true) {
+            JenkinsQueueResponse queueRes = jenkinsClient.get()
+                    .uri(queueItemUri + "api/json")
+                    .retrieve()
+                    .body(JenkinsQueueResponse.class);
 
-        stepSummaries.add(new StepSummary(step.title(), stepStatus, stepError));
-
-        // Jeśli krok posiada pod-kroki, przeliczamy je również
-        if (step.steps() != null) {
-            for (PlaywrightReportDto.StepDto subStep : step.steps()) {
-                extractSteps(subStep, stepSummaries);
+            if (queueRes != null && queueRes.executable() != null) {
+                return queueRes.executable().number();
             }
+            Thread.sleep(2000); // Poll co 2s
+        }
+    }
+
+    private String awaitJobCompletion(String jobName, int buildNumber) throws InterruptedException {
+        while (true) {
+            JenkinsBuildStatusResponse buildRes = jenkinsClient.get()
+                    .uri("/job/{jobName}/{buildNumber}/api/json", jobName, buildNumber)
+                    .retrieve()
+                    .body(JenkinsBuildStatusResponse.class);
+
+            if (buildRes != null && !buildRes.building()) {
+                return buildRes.result();
+            }
+            Thread.sleep(5000); // Poll co 5s
         }
     }
 }
 
-package com.example.demo.controller;
 
-import com.example.demo.dto.playwright.PlaywrightReportDto;
-import com.example.demo.dto.summary.TestSummary;
-import com.example.demo.service.PlaywrightReportParserService;
-import org.springframework.web.bind.annotation.*;
-
-        import java.util.List;
-
-@RestController
-@RequestMapping("/api/reports")
-public class PlaywrightReportController {
-
-    private final PlaywrightReportParserService parserService;
-
-    public PlaywrightReportController(PlaywrightReportParserService parserService) {
-        this.parserService = parserService;
-    }
-
-    @PostMapping(value = "/summary", consumes = "application/json")
-    public List<TestSummary> getReportSummary(@RequestBody PlaywrightReportDto rawReport) {
-        return parserService.parseReport(rawReport);
-    }
+// Reprezentacja odpowiedzi z kolejki (Queue item)
+public record JenkinsQueueResponse(Executable executable) {
+    public record Executable(int number, String url) {}
 }
+
+// Reprezentacja stanu builda
+public record JenkinsBuildStatusResponse(boolean building, String result) {}
+
+// Przykład Twojego raportu końcowego
+public record JobReportDto(String executionId, String status, int coverage) {}
