@@ -1,130 +1,130 @@
-@RestController
-@RequestMapping("/api/jobs")
-public class JenkinsController {
-
-    private final JenkinsIntegrationService jenkinsService;
-
-    public JenkinsController(JenkinsIntegrationService jenkinsService) {
-        this.jenkinsService = jenkinsService;
-    }
-
-    @PostMapping("/run")
-    public CompletableFuture<ResponseEntity<JobReportDto>> runJob(@RequestParam String executionId) {
-        return jenkinsService.triggerAndAwaitReport(executionId)
-                .thenApply(ResponseEntity::ok);
-    }
-}
-
-
 package com.example.jenkins.service;
 
-import com.example.jenkins.dto.*;
-        import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
-import org.springframework.scheduling.annotation.Async;
+import com.example.jenkins.dto.JobReportDto;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 
-import java.net.URI;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 
+@Slf4j
 @Service
-public class JenkinsIntegrationService {
-
-    private static final Logger log = LoggerFactory.getLogger(JenkinsIntegrationService.class);
+public class JenkinsJobService {
 
     private final RestClient jenkinsClient;
+    private final String remoteToken;
+    private final String myCallbackBaseUrl;
 
-    // Konfiguracja klienta z Basic Auth dla Jenkinsa
-    public JenkinsIntegrationService(RestClient.Builder builder) {
-        this.jenkinsClient = builder
-                .baseUrl("https://jenkins.your-domain.com")
-                .defaultHeaders(headers -> headers.setBasicAuth("admin", "11aabbcc_API_TOKEN"))
-                .build();
+    // Mapa przechowująca obietnice wyników (Future) dla aktywnych zadań
+    private final Map<String, CompletableFuture<JobReportDto>> pendingJobs = new ConcurrentHashMap<>();
+
+    public JenkinsJobService(
+            RestClient.Builder builder,
+            @Value("${jenkins.url}") String jenkinsUrl,
+            @Value("${jenkins.remote-token}") String remoteToken,
+            @Value("${app.callback-base-url}") String myCallbackBaseUrl) {
+
+        this.jenkinsClient = builder.baseUrl(jenkinsUrl).build();
+        this.remoteToken = remoteToken;
+        this.myCallbackBaseUrl = myCallbackBaseUrl;
     }
 
-    @Async
-    public CompletableFuture<JobReportDto> triggerAndAwaitReport(String executionId) {
+    /**
+     * Startuje job w Jenkinsie i czeka na sygnał (Callback) z limitem czasu.
+     */
+    public JobReportDto triggerAndAwaitReport(String jobName, String executionId) {
+        log.info("[{}] Inicjalizacja joba: {}", executionId, jobName);
+
+        // 1. Rejestrujemy obietnicę wyniku
+        CompletableFuture<JobReportDto> future = new CompletableFuture<>();
+        pendingJobs.put(executionId, future);
+
         try {
-            // 1. TRIGGER JOBA
-            ResponseEntity<Void> triggerResponse = jenkinsClient.post()
-                    .uri("/job/MojaAutomatyzacja/buildWithParameters?EXTERNAL_EXECUTION_ID={id}", executionId)
+            // Adres, na który Jenkins wyśle POST po zakończeniu
+            String callbackUrl = myCallbackBaseUrl + "/api/jenkins/callback";
+
+            // 2. Strzał do Jenkinsa z tokenem i parametrami
+            jenkinsClient.post()
+                    .uri("/job/{jobName}/buildWithParameters?token={token}&EXTERNAL_EXECUTION_ID={id}&CALLBACK_URL={callback}",
+                            jobName, remoteToken, executionId, callbackUrl)
                     .retrieve()
                     .toBodilessEntity();
 
-            URI queueItemUri = triggerResponse.getHeaders().getLocation();
-            if (queueItemUri == null) {
-                throw new IllegalStateException("Jenkins nie zwrócił nagłówka Location dla kolejki!");
-            }
+            log.info("[{}] Job wysłany. Czekam na callback...", executionId);
 
-            log.info("[{}] Job w kolejce: {}", executionId, queueItemUri);
-
-            // 2. CZEKANIE NA WYSTARTOWANIE JOBA (Pobranie Build Number)
-            int buildNumber = awaitBuildStart(queueItemUri);
-            log.info("[{}] Job wystartował jako Build #{}", executionId, buildNumber);
-
-            // 3. POLLING STANU ZAKOŃCZENIA JOBA
-            String result = awaitJobCompletion("MojaAutomatyzacja", buildNumber);
-            log.info("[{}] Job zakończony ze statusem: {}", executionId, result);
-
-            if (!"SUCCESS".equals(result)) {
-                throw new RuntimeException("Job zakończył się niepowodzeniem: " + result);
-            }
-
-            // 4. POBRANIE ARTEFAKTU Z RAPORTEM
-            JobReportDto report = jenkinsClient.get()
-                    .uri("/job/MojaAutomatyzacja/{buildNumber}/artifact/reports/result.json", buildNumber)
-                    .accept(MediaType.APPLICATION_JSON)
-                    .retrieve()
-                    .body(JobReportDto.class);
-
-            return CompletableFuture.completedFuture(report);
+            // 3. Czekamy na sygnał z Jenkinsa (np. maksymalnie 15 minut)
+            return future.get(15, TimeUnit.MINUTES);
 
         } catch (Exception e) {
-            log.error("[{}] Błąd podczas wykonywania joba Jenkins", executionId, e);
-            return CompletableFuture.failedFuture(e);
+            log.error("[{}] Błąd lub timeout podczas oczekiwania na job", executionId, e);
+            throw new RuntimeException("Nie udało się pobrać raportu dla executionId: " + executionId, e);
+        } finally {
+            // Sprzątamy mapę po zakończeniu / błędzie
+            pendingJobs.remove(executionId);
         }
     }
 
-    private int awaitBuildStart(URI queueItemUri) throws InterruptedException {
-        while (true) {
-            JenkinsQueueResponse queueRes = jenkinsClient.get()
-                    .uri(queueItemUri + "api/json")
-                    .retrieve()
-                    .body(JenkinsQueueResponse.class);
+    /**
+     * Wywoływane przez Controller, gdy Jenkins przysyła sygnał.
+     */
+    public void processCallback(JobReportDto payload) {
+        log.info("[{}] Otrzymano callback z Jenkinsa! Status: {}", payload.executionId(), payload.result());
 
-            if (queueRes != null && queueRes.executable() != null) {
-                return queueRes.executable().number();
-            }
-            Thread.sleep(2000); // Poll co 2s
-        }
-    }
-
-    private String awaitJobCompletion(String jobName, int buildNumber) throws InterruptedException {
-        while (true) {
-            JenkinsBuildStatusResponse buildRes = jenkinsClient.get()
-                    .uri("/job/{jobName}/{buildNumber}/api/json", jobName, buildNumber)
-                    .retrieve()
-                    .body(JenkinsBuildStatusResponse.class);
-
-            if (buildRes != null && !buildRes.building()) {
-                return buildRes.result();
-            }
-            Thread.sleep(5000); // Poll co 5s
+        CompletableFuture<JobReportDto> future = pendingJobs.get(payload.executionId());
+        if (future != null) {
+            future.complete(payload); // Pobudza wątek czekający w triggerAndAwaitReport
+        } else {
+            log.warn("[{}] Otrzymano callback dla nieznanego lub przedawnionego joba!", payload.executionId());
         }
     }
 }
 
+package com.example.jenkins.controller;
 
-// Reprezentacja odpowiedzi z kolejki (Queue item)
-public record JenkinsQueueResponse(Executable executable) {
-    public record Executable(int number, String url) {}
+import com.example.jenkins.dto.JobReportDto;
+import com.example.jenkins.service.JenkinsJobService;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+@RestController
+@RequestMapping("/api/jenkins")
+@RequiredArgsConstructor
+public class JenkinsController {
+
+    private final JenkinsJobService jenkinsJobService;
+
+    // Endpoint wywoływany z Twojego UI
+    @PostMapping("/run")
+    public ResponseEntity<JobReportDto> runJob(
+            @RequestParam String jobName,
+            @RequestParam String executionId) {
+
+        JobReportDto report = jenkinsJobService.triggerAndAwaitReport(jobName, executionId);
+        return ResponseEntity.ok(report);
+    }
+
+    // Endpoint wywoływany przez Jenkinsa (Sygnał Callback)
+    @PostMapping("/callback")
+    public ResponseEntity<Void> handleCallback(@RequestBody JobReportDto payload) {
+        jenkinsJobService.processCallback(payload);
+        return ResponseEntity.ok().build();
+    }
 }
 
-// Reprezentacja stanu builda
-public record JenkinsBuildStatusResponse(boolean building, String result) {}
+package com.example.jenkins.dto;
 
-// Przykład Twojego raportu końcowego
-public record JobReportDto(String executionId, String status, int coverage) {}
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+
+// Raport przekazywany z Jenkinsa w callbacku
+@JsonIgnoreProperties(ignoreUnknown = true)
+public record JobReportDto(
+        String executionId,
+        int buildNumber,
+        String result,     // SUCCESS, FAILURE, ABORTED
+        Object details     // Dowolna treść raportu wygenerowana przez job
+) {}
